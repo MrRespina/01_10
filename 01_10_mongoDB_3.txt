@@ -1,0 +1,181 @@
+for (i=0; i<100; i++){
+	db.test.insertOne({'x':i})
+}
+
+var cursor = db.test.find()
+
+while(cursor.hasNext()){ 
+	obj = cursor.next(); 
+	print(obj.x); 
+}
+
+var cursor = db.test.find()
+cursor.forEach(function(obj){print(obj.x)})
+
+var cursor = db.users.find()
+cursor.forEach(function(obj){print(obj.age)})
+
+var cursor = db.test.find().sort({'x':-1}).limit(10).skip(15)
+cursor.forEach(function(obj){print(obj.x)})
+
+
+
+# indexing
+for(i=0;i<1000000;i++){
+	db.test.insertOne({'i':i,'username':'user'+i,'age':Math.floor(Math.random()*120),'created':new Date()});
+}
+
+
+# explain은 커서 메소드이고, 다양한 CRUD 작업의 실행 정보를 제공한다
+# executionStats는 인덱스를 이용한 쿼리 효과를 이해하도록 도와줌
+# executionTimeMillis는 실행되는 데에 사용된 시간을 미리초 단위로 표현
+
+db.test.find({'username':'user101'}).explain('executionStats')
+
+
+# 인덱스 테이블 생성
+
+db.test.createIndex({'username':1}) # 인덱스를 생성함으로써, 동작에 필요한 시간을 획기적으로 줄였다. stage 구문이 IXSCAN 인 것으로 index를 이용했다는 걸 확인 가능.
+
+
+# 인덱스를 사용하지 않은 구문에서는 속도가 느리고, stage 구문이 COLLSCAN (풀스캔)임.
+
+db.test.find({'age':74}).explain('executionStats')
+
+
+# 복합 인덱스 : 여러개의 필드에 index를 사용
+
+db.test.find({'username':'user101','age':47}).explain('executionStats') # username은 index가 있어서 index를 사용해 검색.(IXSCAN)
+
+db.test.find({'age':47,'username':'user101'}).explain('executionStats') # 인덱스를 만들어준 속성을 먼저 사용해야 함.
+
+
+# 다중 인덱스 생성 및 사용
+
+db.test.createIndex({'age':1,'username':1})
+
+db.test.find({'age':47,'username':'user101'}).explain('executionStats') 
+
+db.test.find({'age':21}).sort({'username':-1})
+
+db.test.find({'age':21}).sort({'username':-1}).explain('executionStats') 
+
+db.test.find({'age':{'$gte':21,'$lte':30}}).pretty().explain('executionStats') 
+
+db.test.find({'age':{'$gte':21,'$lte':30}}).sort({'username':-1}).pretty()
+
+
+
+# 새 컬렉션 생성 및 인덱스 생성
+db.students.insertOne({'_id':ObjectId(),'student_id':0,'scores':[{'type':'exam',score:38.05000002412},{'type':'quiz',score:79.18000002412},{'type':'homework',score:74.50000236841},{'type':'homework',score:74.6831612536458}],'class_id':127})
+
+db.students.find({'class_id':127})
+db.students.createIndex({'class_id':1})
+db.students.find({'student_id':0,'class_id':127})
+
+
+db.students.find({'student_id':{'$lt':500000},'class_id':{'$eq':127}}).sort({'student_id':1})
+# 범위가 크면 index 효과를 얻을 수 없음.
+# 검사하는 범위가 전체 크기에서 4~5% 미만인 경우에만 index를 만들어서 사용한다.
+
+
+# 암시적 인덱스
+{'student_id':1,'class_id':1} # 이와 같은 형식으로 인덱스를 생성했다면,
+{'student_id':1},{'student_id':1,'class_id':1}  # 처럼 암시적 인덱스를 포함해 2개가 생성된다.
+
+# index가 필요 없는 경우
+# != 를 사용하는 경우,($ne,$not)
+db.test.find({'i':{'$ne':3}})
+# 컬렉션에 있는 모든 도큐먼트를 검사해야 하기 때문에 index는 비 효율적임.
+
+db.test.find({'age':47,'username':{'$gte':5,'$lte':8}}).pretty().explain('executionStats')
+db.test.find({'username':{'$gte':5,'$lte':8},'age':47}).pretty().explain('executionStats')
+
+
+
+db.foo.insertOne({'_id':ObjectId(),'apple':1,'banana':6,'peach':3})
+db.foo.insertOne({'_id':ObjectId(),'apple':8,'spinach':4,'watermelon':4})
+
+# or 연산자
+db.foo.find({'$or':[{'apple':8},{'banana':6}]}).explain('executionStats')
+db.foo.find({'apple':8,'banana':6}).explain('executionStats') # and 연산자
+
+
+db.foo.createIndex({'apple':1})
+db.foo.createIndex({'banana':1})
+db.foo.find({'$or':[{'apple':8},{'banana':6}]}).explain('executionStats') # 각 조건마다 하나씩의 인덱스를 사용함.
+db.foo.find({'$or':[{'banana':6},{'apple':8}]}).explain('executionStats') # 조건문의 순서가 달라도 상관없음.
+
+db.foo.find({'$or':[{'apple':8},{'apple':1}]}).explain('executionStats') # or 연산으로 같은 인덱스를 두번 불러오면 손해임.
+db.foo.find({'apple':{'$in':[1,8]}}).explain('executionStats') # in으로 한번만 연산하는게 효율이 좋다.
+
+
+# 내장 도큐먼트 index
+
+# before
+db.students.find({'scores.score':79.18000002412})
+db.students.find({'scores.score':79.18000002412}).explain('executionStats')
+
+ > db.students.createIndex({'scores.score':1})
+
+# after
+db.students.find({'scores.score':79.18000002412})
+db.students.find({'scores.score':79.18000002412}).explain('executionStats') # 인덱스를 사용하여 배열 검색이 되었다.
+
+# 권장하지 않는 사용 방식. 인덱스를 사용하지 않기 때문에.
+db.students.find({'scores':{'type':'exam','score':38.05000002412}})
+db.students.find({'scores':{'type':'exam','score':38.05000002412}}).explain('executionStats')
+
+
+db.students.find({'scores.2.score': 74.50000236841})
+db.students.find({'scores.2.score': 74.50000236841}).explain('executionStats')   # 인덱스를 만들어줬어도, 배열의 인덱스로 찾을때는 인덱스를 사용하지 못함.
+db.students.find({'scores.3.score': 74.6831612536458})
+db.students.find({'scores.3.score': 74.6831612536458}).explain('executionStats')
+
+# 배열 인덱싱
+
+db.students.createIndex({'scores.2.score':1}) # 배열의 요소 2번에 index를 만들어줌.
+
+db.students.find({'scores.2.score': 74.50000236841})
+db.students.find({'scores.2.score': 74.50000236841}).explain('executionStats')   # 인덱스를 만들어줬기 때문에 인덱스 사용.
+db.students.find({'scores.3.score': 74.6831612536458})
+db.students.find({'scores.3.score': 74.6831612536458}).explain('executionStats') # .3 인자는 인덱스가 없기 때문에 인덱스 사용 x
+
+
+
+# 집계 프레임워크
+
+db.companies.insertOne({'_id':ObjectId(),'name':'Facebook','category_code':'social','founded_year':2004,'description':'Social network','funding_rounds':[
+{'id':4,'round_code':'b','raised_amount':27500000,'raised_currency_code':'USD','funded_year':2006,'investment':[
+{'compony':null,'financial_org':{'name':'Greylock Partners','permalink':'greylock'},'person':null},
+{'compony':null,'financial_org':{'name':'Meritech Capital Partners','permalink':'Meritech-Capital-Partners'},'person':null},
+{'compony':null,'financial_org':{'name':'Founders Fund','permalink':'founders-fund'},'person':null},
+{'compony':null,'financial_org':{'name':'SV Angel','permalink':'sv-angel'},'person':null}]}],'ipo':{'valuation_amount':NumberLong('104000000000000'),
+'valuation_currency_code':'USD','pub_year':2012,'pub_month':5,'pub_day':18,'stock_symbol':'NASDAQ:F8'}})
+
+
+# 일치
+
+# 설립 년도가 2004인 모든 회사를 출력.
+db.companies.find({'founded_year':2004})
+db.companies.aggregate([{$match:{'founded_year':2004}}]) # 집계 연산을 사용할 때는 aggregate 사용!
+
+
+db.companies.find({'founded_year':2004},{'name':1,'founded_year':1,'_id':0})
+db.companies.aggregate([{$match:{'founded_year':2004}},{$project:{_id:0,name:1,founded_year:1}}])       # 배열 내부에 조건절을 계속 추가해줄 수 있다.
+
+
+db.companies.find({'founded_year':2004},{'name':1,'founded_year':1,'_id':0}).limit(3)
+db.companies.aggregate([{$match:{'founded_year':2004}},{$project:{_id:0,name:1,founded_year:1}},{$limit : 2}])
+
+
+db.companies.find({'founded_year':2004},{'name':1,'founded_year':1,'_id':0}).limit(3).sort({'name':1})
+db.companies.aggregate([{$match:{'founded_year':2004}},{$project:{_id:0,name:1,founded_year:1}},{$limit : 2},{$sort:{'name':1}}])
+
+
+db.companies.find({'founded_year':2004},{'name':1,'founded_year':1,'_id':0}).limit(3).sort({'name':1}).skip(10)
+db.companies.aggregate([{$match:{'founded_year':2004}},{$sort:{'name':1}},{$skip:1},{$project:{_id:0,name:1,founded_year:1}},{$limit : 2}])
+
+
+db.companies.find({'funding_rounds.investment.financial_org.permalink':'greylock'},{'name':1,'ipo':{'valuation_amount':1,'pub_year':1},'funding_rounds.investment.financial_org.permalink':1,'_id':0})
+db.companies.find({'funding_rounds.investment.financial_org.permalink':'greylock'},{'name':1,'ipo.valuation_amount':1,'ipo.pub_year':1,'funding_rounds.investment.financial_org.permalink':1,'_id':0})
